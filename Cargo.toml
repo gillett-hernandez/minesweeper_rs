@@ -10,3 +10,13 @@ minifb = "0.19.3"
 rayon = "1.5.1"
 structopt = "0.3.22"
 rand = "0.8.4"
+
+
+
+[profile.dev]
+opt-level = 3
+panic='abort'
+debug=true
+
+[profile.test]
+opt-level = 0

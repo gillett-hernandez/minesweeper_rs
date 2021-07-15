@@ -25,6 +25,7 @@ pub enum GameCondition {
     Lost,
 }
 
+#[derive(Clone)]
 pub struct GameState<const X: usize, const Y: usize> {
     pub field: Vec<Vec<Cell>>,
     pub sub_state: GameCondition,
@@ -86,16 +87,16 @@ impl<const X: usize, const Y: usize> GameState<X, Y> {
         }
     }
 
-    pub fn at_offset(&self, x: usize, y: usize, xo: isize, yo: isize) -> Option<Cell> {
-        println!("{} {} {} {}", x, y, xo, yo);
-        if (x == 0 && xo < 0) || (y == 0 && xo < 0) {
-            None
-        } else if (x as isize + xo) as usize >= X || (y as isize + yo) as usize >= Y {
-            None
-        } else {
-            Some(self.field[y][x])
-        }
-    }
+    // pub fn at_offset(&self, x: usize, y: usize, xo: isize, yo: isize) -> Option<Cell> {
+    //     println!("{} {} {} {}", x, y, xo, yo);
+    //     if (x == 0 && xo < 0) || (y == 0 && xo < 0) {
+    //         None
+    //     } else if (x as isize + xo) as usize >= X || (y as isize + yo) as usize >= Y {
+    //         None
+    //     } else {
+    //         Some(self.field[y][x])
+    //     }
+    // }
 
     pub fn at_mut(&mut self, x: usize, y: usize) -> Option<&mut Cell> {
         if x >= X || y >= Y {
@@ -115,10 +116,14 @@ impl<const X: usize, const Y: usize> GameState<X, Y> {
                 if (x == 0 && *x_offset < 0) || (y == 0 && *y_offset < 0) {
                     continue;
                 }
-                neighbors.push((
+                let (x, y) = (
                     (x as isize + *x_offset) as usize,
                     (y as isize + *y_offset) as usize,
-                ));
+                );
+                if x >= X || y >= Y {
+                    continue;
+                }
+                neighbors.push((x, y));
             }
         }
         neighbors
@@ -197,7 +202,7 @@ impl<const X: usize, const Y: usize> GameState<X, Y> {
                             .sum::<usize>();
 
                         if mine_count == 0 {
-                            click_neighbors = true;
+                            // click_neighbors = true;
                         }
 
                         Cell {
@@ -231,14 +236,29 @@ impl<const X: usize, const Y: usize> GameState<X, Y> {
         // returns whether the hypothetical gamestate is the same as the current gamestate
         // after visibility is factored in.
 
-        for (cell1, cell2) in self
+        for (i, (cell1, cell2)) in self
             .field
             .iter()
             .flatten()
             .zip(hypothetical.field.iter().flatten())
+            .enumerate()
         {
-            if cell1.visibility != cell2.visibility {
-                return false;
+            if let CellVisibility::Empty(n1) = cell1.visibility {
+                let (x, y) = (i % X, i / X);
+                let n2 = hypothetical
+                    .neighbors(x, y)
+                    .iter()
+                    .map(|e| {
+                        if hypothetical.at(e.0, e.1).unwrap().state == CellState::Mine {
+                            1usize
+                        } else {
+                            0usize
+                        }
+                    })
+                    .sum();
+                if n1 != n2 {
+                    return false;
+                }
             }
         }
         true
