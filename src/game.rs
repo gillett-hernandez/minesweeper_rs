@@ -35,7 +35,6 @@ pub struct GameState<const X: usize, const Y: usize> {
 
 impl<const X: usize, const Y: usize> GameState<X, Y> {
     pub fn new(num_bombs: usize) -> Self {
-        println!("hi");
         let mut cells = vec![
             vec![
                 Cell {
@@ -57,7 +56,6 @@ impl<const X: usize, const Y: usize> GameState<X, Y> {
                 }
             }
         }
-        println!("hi");
 
         GameState {
             field: cells,
@@ -86,12 +84,42 @@ impl<const X: usize, const Y: usize> GameState<X, Y> {
         }
     }
 
+    pub fn at_offset(&self, x: usize, y: usize, xo: isize, yo: isize) -> Option<Cell> {
+        println!("{} {} {} {}", x, y, xo, yo);
+        if (x == 0 && xo < 0) || (y == 0 && xo < 0) {
+            None
+        } else if (x as isize + xo) as usize >= X || (y as isize + yo) as usize >= Y {
+            None
+        } else {
+            Some(self.field[y][x])
+        }
+    }
+
     pub fn at_mut(&mut self, x: usize, y: usize) -> Option<&mut Cell> {
         if x >= X || y >= Y {
             None
         } else {
             Some(&mut self.field[y][x])
         }
+    }
+
+    pub fn neighbors(&self, x: usize, y: usize) -> Vec<(usize, usize)> {
+        let mut neighbors = Vec::new();
+        for x_offset in [-1isize, 0, 1].iter() {
+            for y_offset in [-1isize, 0, 1].iter() {
+                if *x_offset == 0 && *y_offset == 0 {
+                    continue;
+                }
+                if (x == 0 && *x_offset < 0) || (y == 0 && *y_offset < 0) {
+                    continue;
+                }
+                neighbors.push((
+                    (x as isize + *x_offset) as usize,
+                    (y as isize + *y_offset) as usize,
+                ));
+            }
+        }
+        neighbors
     }
 
     pub fn flag(&mut self, x: usize, y: usize) {
@@ -106,8 +134,22 @@ impl<const X: usize, const Y: usize> GameState<X, Y> {
                 self.sub_state = GameCondition::Won;
             }
         }
-        let cell = self.at_mut(x, y).unwrap();
-        *cell = Cell {
+        // for (nx, ny) in self.neighbors(x, y).iter() {
+        //     if let Some(Cell {
+        //         visibility: CellVisibility::Empty(neighbors),
+        //         state,
+        //     }) = self.at(*nx, *ny)
+        //     {
+        //         if neighbors >= 1 {
+        //             *self.at_mut(*nx, *ny).unwrap() = Cell {
+        //                 state,
+        //                 visibility: CellVisibility::Empty(neighbors - 1),
+        //             };
+        //         }
+        //     }
+        // }
+        let mut_cell = self.at_mut(x, y).unwrap();
+        *mut_cell = Cell {
             visibility: CellVisibility::Flagged,
             ..copy
         };
@@ -136,25 +178,21 @@ impl<const X: usize, const Y: usize> GameState<X, Y> {
                         visibility: CellVisibility::Unknown,
                     } => {
                         // calculate neighbors
-                        let mut mine_count = 0;
-                        for x_offset in [-1isize, 0, 1].iter() {
-                            for y_offset in [-1isize, 0, 1].iter() {
-                                if *x_offset == 0 && *y_offset == 0 {
-                                    continue;
-                                }
-                                if (x == 0 && *x_offset < 0) || (y == 0 && *y_offset < 0) {
-                                    continue;
-                                }
-                                if let Some(cell) = self.at(
-                                    (x as isize + x_offset) as usize,
-                                    (y as isize + y_offset) as usize,
-                                ) {
+                        let mine_count = self
+                            .neighbors(x, y)
+                            .iter()
+                            .map(|(x, y)| {
+                                if let Some(cell) = self.at(*x, *y) {
                                     if cell.state == CellState::Mine {
-                                        mine_count += 1;
+                                        1usize
+                                    } else {
+                                        0
                                     }
+                                } else {
+                                    0
                                 }
-                            }
-                        }
+                            })
+                            .sum::<usize>();
 
                         if mine_count == 0 {
                             click_neighbors = true;

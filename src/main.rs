@@ -2,11 +2,11 @@ use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Scale, Window, WindowOption
 use rayon::prelude::*;
 use structopt::StructOpt;
 
-mod ai;
 mod game;
+mod solver;
 
-use ai::*;
 use game::*;
+use solver::*;
 
 pub fn rgb_to_u32(r: u8, g: u8, b: u8) -> u32 {
     ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
@@ -40,6 +40,9 @@ fn main() {
     )
     .unwrap();
 
+    let frame_micros = 1000000.0 / 60.0;
+    window.limit_update_rate(Some(std::time::Duration::from_micros(frame_micros as u64)));
+
     const WIDTH: usize = 50;
     const HEIGHT: usize = 50;
     let mut game_state = GameState::<WIDTH, HEIGHT>::new(300);
@@ -51,7 +54,9 @@ fn main() {
         .unwrap();
     // let (x, y) = game_state.random_xy_2();
     // game_state.click(x, y);
-    let mut one_off = true;
+    // let mut one_off = true;
+    let mut solver = Solver::<WIDTH, HEIGHT>::new();
+    let mut guess_count = 0;
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
         // draw phase
@@ -69,42 +74,70 @@ fn main() {
                         ..
                     } => {
                         // println!("blue is {}", (*neighbors as f32 * 256.0 / 8.0));
-                        window_pixels[y * width + x] = rgb_to_u32(
-                            0,
-                            0,
-                            (0.0 + 256.0 * (*neighbors as f32 / 8.0).powf(0.4)) as u8,
-                        );
+
+                        window_pixels[y * width + x] = match neighbors {
+                            0 => rgb_to_u32(0, 0, 0),
+                            1 => rgb_to_u32(0, 64, 64),
+                            2 => rgb_to_u32(0, 64, 127),
+                            3 => rgb_to_u32(80, 127, 255),
+                            4 => rgb_to_u32(80, 127, 0),
+                            5 => rgb_to_u32(80, 180, 127),
+                            6 => rgb_to_u32(160, 180, 180),
+                            7 => rgb_to_u32(160, 255, 255),
+                            _ => rgb_to_u32(255, 255, 255),
+                        };
                     }
                     Cell {
                         visibility: CellVisibility::Flagged,
                         ..
                     } => {
-                        window_pixels[y * width + x] = rgb_to_u32(0, 255, 0);
+                        window_pixels[y * width + x] = rgb_to_u32(255, 0, 0);
                     }
                 }
             }
         }
 
         // ai update and gamestate progression phase
-        if one_off {
-            let (x, y) = game_state.random_xy_2();
-            game_state.click(x, y);
-            one_off = false;
+
+        match solver.next_click(&game_state) {
+            Event::Flag { pos } => game_state.flag(pos.0, pos.1),
+            Event::Click { pos } => game_state.click(pos.0, pos.1),
+
+            Event::None => {
+                let (x, y) = loop {
+                    let (x, y) = game_state.random_xy_2();
+                    match game_state.at(x, y) {
+                        Some(Cell {
+                            visibility: CellVisibility::Unknown,
+                            ..
+                        }) => {
+                            break (x, y);
+                        }
+                        _ => {}
+                    }
+                };
+                guess_count += 1;
+                println!("guessed");
+                game_state.click(x, y);
+            }
         }
 
         let mut restart = false;
         if game_state.sub_state == GameCondition::Lost {
-            println!("game lost");
+            println!("game lost, with {} guesses", guess_count);
             restart = true;
-            one_off = true;
+            // one_off = true;
         }
         if game_state.sub_state == GameCondition::Won {
-            println!("game won");
+            println!("game won, with {} guesses", guess_count);
             restart = true;
-            one_off = true;
+            // one_off = true;
         }
         if restart {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+
             game_state = GameState::<WIDTH, HEIGHT>::new(300);
+            guess_count = 0
         }
 
         // window update
