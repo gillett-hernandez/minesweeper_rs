@@ -1,5 +1,4 @@
 use rand::prelude::*;
-
 #[derive(Copy, Clone, PartialEq)]
 pub enum CellState {
     Empty,
@@ -63,6 +62,9 @@ impl<const X: usize, const Y: usize> GameState<X, Y> {
             bomb_count: num_bombs,
             flagged_count: 0,
         }
+    }
+    pub fn remaining_mines(&self) -> usize {
+        self.bomb_count - self.flagged_count
     }
 
     pub fn random_xy() -> (usize, usize) {
@@ -223,5 +225,22 @@ impl<const X: usize, const Y: usize> GameState<X, Y> {
                 }
             }
         }
+    }
+
+    pub fn validate(&self, hypothetical: &GameState<X, Y>) -> bool {
+        // returns whether the hypothetical gamestate is the same as the current gamestate
+        // after visibility is factored in.
+
+        for (cell1, cell2) in self
+            .field
+            .iter()
+            .flatten()
+            .zip(hypothetical.field.iter().flatten())
+        {
+            if cell1.visibility != cell2.visibility {
+                return false;
+            }
+        }
+        true
     }
 }

@@ -1,6 +1,7 @@
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Scale, Window, WindowOptions};
 use rayon::prelude::*;
 use structopt::StructOpt;
+pub  use rand::prelude::*;
 
 mod game;
 mod solver;
@@ -104,21 +105,44 @@ fn main() {
             Event::Click { pos } => game_state.click(pos.0, pos.1),
 
             Event::None => {
-                let (x, y) = loop {
-                    let (x, y) = game_state.random_xy_2();
-                    match game_state.at(x, y) {
-                        Some(Cell {
+                let mut unknown_cells = Vec::new();
+                for (x, y, cell) in game_state
+                    .field
+                    .iter()
+                    .enumerate()
+                    .map(|(y, e)| e.iter().enumerate().map(move |(x, cell)| (x, y, cell)))
+                    .flatten()
+                {
+                    match cell {
+                        Cell {
                             visibility: CellVisibility::Unknown,
                             ..
-                        }) => {
-                            break (x, y);
+                        } => {
+                            unknown_cells.push((x, y, cell));
                         }
                         _ => {}
                     }
-                };
+                }
                 guess_count += 1;
-                println!("guessed");
-                game_state.click(x, y);
+                // execute optimal guessing strategy:
+
+                // need to generate combinations.
+
+
+                println!(
+                    "guessed, unknown: {}, remaining mines: {}",
+                    game_state.field.iter().flatten().fold(0, |a, b| {
+                        a + if b.visibility == CellVisibility::Unknown {
+                            1
+                        } else {
+                            0
+                        }
+                    }),
+                    game_state.remaining_mines()
+                );
+
+                let index = (unknown_cells.len() as f32 * random::<f32>()) as usize;
+                game_state.click(unknown_cells[index].0, unknown_cells[index].1);
             }
         }
 
