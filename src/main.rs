@@ -32,6 +32,9 @@ struct Opt {
 
     #[structopt(long, default_value = "22")]
     pub threads: usize,
+
+    #[structopt(long, default_value = "2")]
+    pub skip: usize,
 }
 
 fn main() {
@@ -68,7 +71,7 @@ fn main() {
     let mut solver = Solver::<WIDTH, HEIGHT>::new();
     let mut guess_count = 0;
     let mut frame = 0;
-    let framerule = 100;
+    let framerule = opt.skip;
     let mut saved_valid_clicks = Vec::new();
 
     while window.is_open() && !window.is_key_down(Key::Escape) {

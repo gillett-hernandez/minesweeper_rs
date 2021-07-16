@@ -259,11 +259,11 @@ pub struct Solver<const X: usize, const Y: usize> {
 impl<const X: usize, const Y: usize> Solver<X, Y> {
     pub fn new() -> Self {
         let mut solvers: Vec<Box<dyn Strategy<X, Y>>> = Vec::new();
-        solvers.push(Box::new(BijectionDetection {
+        solvers.push(Box::new(ZeroNeighborDetection {
             initialized: false,
             cells_of_interest: vec![],
         }));
-        solvers.push(Box::new(ZeroNeighborDetection {
+        solvers.push(Box::new(BijectionDetection {
             initialized: false,
             cells_of_interest: vec![],
         }));
