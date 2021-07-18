@@ -1,4 +1,12 @@
 use rand::prelude::*;
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum Event {
+    Click { pos: (usize, usize) },
+    Flag { pos: (usize, usize) },
+    None,
+}
+
 #[derive(Copy, Clone, PartialEq)]
 pub enum CellState {
     Empty,
@@ -16,6 +24,7 @@ pub enum CellVisibility {
 pub struct Cell {
     pub state: CellState,
     pub visibility: CellVisibility,
+    pub next_action: Event,
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -39,7 +48,8 @@ impl<const X: usize, const Y: usize> GameState<X, Y> {
             vec![
                 Cell {
                     state: CellState::Empty,
-                    visibility: CellVisibility::Unknown
+                    visibility: CellVisibility::Unknown,
+                    next_action: Event::None,
                 };
                 X
             ];
@@ -183,6 +193,7 @@ impl<const X: usize, const Y: usize> GameState<X, Y> {
                     Cell {
                         state: CellState::Empty,
                         visibility: CellVisibility::Unknown,
+                        next_action: _,
                     } => {
                         // calculate neighbors
                         let mine_count = self
@@ -207,6 +218,7 @@ impl<const X: usize, const Y: usize> GameState<X, Y> {
 
                         Cell {
                             visibility: CellVisibility::Empty(mine_count),
+                            next_action: Event::None,
                             ..copy
                         }
                     }
