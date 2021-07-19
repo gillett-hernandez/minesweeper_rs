@@ -42,6 +42,39 @@ struct Opt {
     pub skip: usize,
 }
 
+fn check_and_restart_game<const X: usize, const Y: usize>(
+    game_state: &mut GameState<X, Y>,
+    solver: &mut Solver<X, Y>,
+    saved_valid_clicks: &mut Vec<Event>,
+    guess_count: &mut usize,
+    num_bombs: usize,
+) -> bool {
+    let mut restart = false;
+    if game_state.sub_state == GameCondition::Lost {
+        println!("game lost, with {} guesses", guess_count);
+        restart = true;
+        // one_off = true;
+    }
+    if game_state.sub_state == GameCondition::Won {
+        println!("game won, with {} guesses", guess_count);
+        restart = true;
+        // one_off = true;
+    }
+    if restart {
+        // if game_state.remaining_mines() as f32 / (NUM_BOMBS as f32) < 0.03 {
+        //     std::thread::sleep(std::time::Duration::from_secs(30));
+        // }
+
+        *game_state = GameState::<X, Y>::new(num_bombs);
+        *solver = Solver::new();
+        *guess_count = 0;
+        saved_valid_clicks.clear();
+        true
+    } else {
+        false
+    }
+}
+
 fn main() {
     let opt = Opt::from_args();
     let (width, height) = (opt.width, opt.height);
@@ -70,7 +103,7 @@ fn main() {
 
     const WIDTH: usize = 100;
     const HEIGHT: usize = 100;
-    const NUM_BOMBS: usize = 1200;
+    const NUM_BOMBS: usize = 1300;
     let mut game_state = GameState::<WIDTH, HEIGHT>::new(NUM_BOMBS);
     let mut window_pixels = vec![0u32; width * height];
 
@@ -88,7 +121,7 @@ fn main() {
     let display_gameboard = opt.silence;
     let mut saved_valid_clicks = Vec::new();
 
-    loop {
+    'outer: loop {
         if let Some(w) = &window {
             if !(w.is_open() && !w.is_key_down(Key::Escape)) {
                 break;
@@ -147,26 +180,15 @@ fn main() {
                 Event::None => {}
             }
 
-            let mut restart = false;
-            if game_state.sub_state == GameCondition::Lost {
-                println!("game lost, with {} guesses", guess_count);
-                restart = true;
-                // one_off = true;
+            if check_and_restart_game(
+                &mut game_state,
+                &mut solver,
+                &mut saved_valid_clicks,
+                &mut guess_count,
+                NUM_BOMBS,
+            ) {
+                continue 'outer;
             }
-            if game_state.sub_state == GameCondition::Won {
-                println!("game won, with {} guesses", guess_count);
-                restart = true;
-                // one_off = true;
-            }
-            if restart {
-                // if game_state.remaining_mines() as f32 / (NUM_BOMBS as f32) < 0.03 {
-                //     std::thread::sleep(std::time::Duration::from_secs(30));
-                // }
-
-                game_state = GameState::<WIDTH, HEIGHT>::new(NUM_BOMBS);
-                guess_count = 0
-            }
-
             solver.update(&game_state, *event);
         }
 
@@ -270,12 +292,12 @@ fn main() {
                 event = Event::Click { pos: (x, y) };
             } else {
                 guess_count += 1;
-                println!(
-                    "guessed randomly, unknown: {}, remaining mines: {}. search scale was {}",
-                    unknown_cells.len(),
-                    game_state.remaining_mines(),
-                    search_scale
-                );
+                // println!(
+                //     "guessed randomly, unknown: {}, remaining mines: {}. search scale was {}",
+                //     unknown_cells.len(),
+                //     game_state.remaining_mines(),
+                //     search_scale
+                // );
 
                 let index = (unknown_cells.len() as f32 * random::<f32>()) as usize;
                 let (x, y) = (unknown_cells[index].0, unknown_cells[index].1);
@@ -284,27 +306,15 @@ fn main() {
                 event = Event::Click { pos: (x, y) };
             }
 
-            let mut restart = false;
-            if game_state.sub_state == GameCondition::Lost {
-                println!("game lost, with {} guesses", guess_count);
-                restart = true;
-                // one_off = true;
+            if check_and_restart_game(
+                &mut game_state,
+                &mut solver,
+                &mut saved_valid_clicks,
+                &mut guess_count,
+                NUM_BOMBS,
+            ) {
+                continue 'outer;
             }
-            if game_state.sub_state == GameCondition::Won {
-                println!("game won, with {} guesses", guess_count);
-                restart = true;
-                // one_off = true;
-            }
-            if restart {
-                // if game_state.remaining_mines() as f32 / (NUM_BOMBS as f32) < 0.03 {
-                //     std::thread::sleep(std::time::Duration::from_secs(30));
-                // }
-
-                game_state = GameState::<WIDTH, HEIGHT>::new(NUM_BOMBS);
-                guess_count = 0
-            }
-
-
             solver.update(&game_state, event);
         }
 

@@ -85,10 +85,6 @@ impl<const X: usize, const Y: usize> GameState<X, Y> {
         )
     }
 
-    pub fn random_xy_2(&self) -> (usize, usize) {
-        GameState::<X, Y>::random_xy()
-    }
-
     pub fn at(&self, x: usize, y: usize) -> Option<Cell> {
         if x >= X || y >= Y {
             None

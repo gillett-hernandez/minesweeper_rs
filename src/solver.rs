@@ -1,4 +1,6 @@
-use rayon::iter::{IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator};
+use rayon::iter::{
+    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
+};
 
 use crate::game::*;
 
@@ -9,21 +11,20 @@ pub trait Strategy<const X: usize, const Y: usize> {
 
 pub struct BijectionDetection {
     initialized: bool,
-    cells_of_interest: Vec<Option<(usize, usize, Cell)>>,
+    cells_of_interest: Vec<Option<Cell>>,
 }
 
 impl<const X: usize, const Y: usize> Strategy<X, Y> for BijectionDetection {
     fn attempt(&mut self, game_state: &GameState<X, Y>) -> Vec<Event> {
-
         let first_cells: Vec<Event> = self
             .cells_of_interest
             .par_iter_mut()
-            .filter_map(|cell| {
+            .enumerate()
+            .filter_map(|(i, cell)| {
                 if cell.is_none() {
                     return None;
                 }
-                let cell0 = cell.unwrap();
-                let (x, y) = (cell0.0, cell0.1);
+                let (x, y) = (i % X, i / X);
                 let center_cell = game_state.at(x, y).unwrap();
                 let mut suggested_cell = Event::None;
                 match center_cell {
@@ -92,55 +93,22 @@ impl<const X: usize, const Y: usize> Strategy<X, Y> for BijectionDetection {
     fn update(&mut self, game_state: &GameState<X, Y>, event: Event) {
         if !self.initialized {
             // do initialization step.
-            // self.cells_of_interest = game_state
-            //     .field
-            //     .iter()
-            //     .enumerate()
-            //     .map(|(y, e)| e.iter().enumerate().map(move |(x, cell)| (x, y, *cell)))
-            //     .flatten()
-            //     .collect();
+            self.cells_of_interest = vec![None; X * Y];
             self.initialized = true;
         } else {
             // process event to update cells_of_interest, such that useless cells are ignored.
             match event {
                 Event::Flag { pos } => {
-                    let mut delete_idx = None;
-                    for (i, (x, y, cell)) in
-                        self.cells_of_interest.iter().filter_map(|e| *e).enumerate()
-                    {
-                        if pos.0 == x && pos.1 == y {
-                            delete_idx = Some(i);
-                            break;
-                        }
-                    }
-                    if let Some(delete_idx) = delete_idx {
-                        self.cells_of_interest.swap_remove(delete_idx);
-                    }
+                    self.cells_of_interest[pos.0 + pos.1 * X] = None;
                 }
                 Event::Click { pos } => {
-                    self.cells_of_interest.push(Some((
-                        pos.0,
-                        pos.1,
-                        game_state.at(pos.0, pos.1).unwrap(),
-                    )));
+                    self.cells_of_interest[pos.0 + pos.1 * X] =
+                        Some(game_state.at(pos.0, pos.1).unwrap());
                     for (x, y) in game_state.neighbors(pos.0, pos.1) {
-                        self.cells_of_interest
-                            .push(Some((x, y, game_state.at(x, y).unwrap())));
+                        self.cells_of_interest[x + y * X] = Some(game_state.at(x, y).unwrap());
                     }
                 }
                 _ => {}
-            }
-            let mut cells_to_delete = Vec::new();
-            for (i, _) in self
-                .cells_of_interest
-                .iter()
-                .enumerate()
-                .filter(|(i, e)| e.is_none())
-            {
-                cells_to_delete.push(i);
-            }
-            for delete_idx in cells_to_delete.iter().rev() {
-                self.cells_of_interest.swap_remove(*delete_idx);
             }
         }
     }
@@ -148,7 +116,7 @@ impl<const X: usize, const Y: usize> Strategy<X, Y> for BijectionDetection {
 
 pub struct ExhaustedCellDetection {
     initialized: bool,
-    cells_of_interest: Vec<Option<(usize, usize, Cell)>>,
+    cells_of_interest: Vec<Option<Cell>>,
 }
 
 impl<const X: usize, const Y: usize> Strategy<X, Y> for ExhaustedCellDetection {
@@ -159,13 +127,14 @@ impl<const X: usize, const Y: usize> Strategy<X, Y> for ExhaustedCellDetection {
         let first_cells: Vec<Event> = self
             .cells_of_interest
             .par_iter_mut()
-            .filter_map(|cell| {
+            .enumerate()
+            .filter_map(|(i, cell)| {
                 if cell.is_none() {
                     return None;
                 }
                 let mut suggested_cell = Event::None;
-                let cell0 = cell.unwrap();
-                let (x, y) = (cell0.0, cell0.1);
+
+                let (x, y) = (i % X, i / X);
                 let center_cell = game_state.at(x, y).unwrap();
                 let mut suggested_cell = Event::None;
                 match center_cell {
@@ -226,55 +195,22 @@ impl<const X: usize, const Y: usize> Strategy<X, Y> for ExhaustedCellDetection {
     fn update(&mut self, game_state: &GameState<X, Y>, event: Event) {
         if !self.initialized {
             // do initialization step.
-            // self.cells_of_interest = game_state
-            //     .field
-            //     .iter()
-            //     .enumerate()
-            //     .map(|(y, e)| e.iter().enumerate().map(move |(x, cell)| (x, y, *cell)))
-            //     .flatten()
-            //     .collect();
+            self.cells_of_interest = vec![None; X * Y];
             self.initialized = true;
         } else {
             // process event to update cells_of_interest, such that useless cells are ignored.
             match event {
                 Event::Flag { pos } => {
-                    let mut delete_idx = None;
-                    for (i, (x, y, cell)) in
-                        self.cells_of_interest.iter().filter_map(|e| *e).enumerate()
-                    {
-                        if pos.0 == x && pos.1 == y {
-                            delete_idx = Some(i);
-                            break;
-                        }
-                    }
-                    if let Some(delete_idx) = delete_idx {
-                        self.cells_of_interest.swap_remove(delete_idx);
-                    }
+                    self.cells_of_interest[pos.0 + pos.1 * X] = None;
                 }
                 Event::Click { pos } => {
-                    self.cells_of_interest.push(Some((
-                        pos.0,
-                        pos.1,
-                        game_state.at(pos.0, pos.1).unwrap(),
-                    )));
+                    self.cells_of_interest[pos.0 + pos.1 * X] =
+                        Some(game_state.at(pos.0, pos.1).unwrap());
                     for (x, y) in game_state.neighbors(pos.0, pos.1) {
-                        self.cells_of_interest
-                            .push(Some((x, y, game_state.at(x, y).unwrap())));
+                        self.cells_of_interest[x + y * X] = Some(game_state.at(x, y).unwrap());
                     }
                 }
                 _ => {}
-            }
-            let mut cells_to_delete = Vec::new();
-            for (i, _) in self
-                .cells_of_interest
-                .iter()
-                .enumerate()
-                .filter(|(i, e)| e.is_none())
-            {
-                cells_to_delete.push(i);
-            }
-            for delete_idx in cells_to_delete.iter().rev() {
-                self.cells_of_interest.swap_remove(*delete_idx);
             }
         }
     }
@@ -303,18 +239,19 @@ impl<const X: usize, const Y: usize> Solver<X, Y> {
 
     pub fn next_clicks(&mut self, game_state: &GameState<X, Y>) -> Vec<Event> {
         let events: Vec<Event> = (&mut self.strategies)
-            .iter_mut()
-            .map(|solver| solver.attempt(game_state))
-            .flatten()
-            .collect::<Vec<Event>>()
-            .par_iter()
-            .filter(|e| match e {
+            .iter_mut() // mutably iterate over strategies
+            .map(|solver| solver.attempt(game_state)) // attempt to solve with each strategy
+            .flatten() // flatten to a iterator of events
+            .collect::<Vec<Event>>() // collect
+            .par_iter() // parallel iterate
+            .filter(|e| match &&e {
+                // filter out None events
                 Event::None => false,
                 _ => true,
             })
-            .map(|e| *e)
+            .map(move |&e| e) // dereference/copy
             .collect();
-        println!("{}", events.len());
+        // println!("{}", events.len());
         events
     }
 
