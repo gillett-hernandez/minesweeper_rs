@@ -7,24 +7,23 @@ pub enum Event {
     None,
 }
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Debug)]
 pub enum CellState {
     Empty,
     Mine,
 }
 
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, PartialEq, Debug)]
 pub enum CellVisibility {
     Unknown,
     Flagged,
     Empty(usize), // number of neighbors that are mines.
 }
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub struct Cell {
     pub state: CellState,
     pub visibility: CellVisibility,
-    pub next_action: Event,
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -35,33 +34,31 @@ pub enum GameCondition {
 }
 
 #[derive(Clone)]
-pub struct GameState<const X: usize, const Y: usize> {
-    pub field: Vec<Vec<Cell>>,
-    pub sub_state: GameCondition,
+pub struct GameState {
+    pub field: Vec<Cell>,
+    pub width: usize,
+    pub height: usize,
+    pub game_condition: GameCondition,
     pub bomb_count: usize,
     flagged_count: usize,
 }
 
-impl<const X: usize, const Y: usize> GameState<X, Y> {
-    pub fn new(num_bombs: usize) -> Self {
+impl GameState {
+    pub fn new(width: usize, height: usize, num_bombs: usize) -> Self {
         let mut cells = vec![
-            vec![
-                Cell {
-                    state: CellState::Empty,
-                    visibility: CellVisibility::Unknown,
-                    next_action: Event::None,
-                };
-                X
-            ];
-            Y
+            Cell {
+                state: CellState::Empty,
+                visibility: CellVisibility::Unknown,
+            };
+            width * height
         ];
 
         for bomb in 0..num_bombs {
             // note: naive mine generation can lead to unsolvable patterns.
             loop {
-                let (x, y) = GameState::<X, Y>::random_xy();
-                if cells[y][x].state == CellState::Empty {
-                    cells[y][x].state = CellState::Mine;
+                let (x, y) = GameState::random_xy(width, height);
+                if cells[y * width + x].state == CellState::Empty {
+                    cells[y * width + x].state = CellState::Mine;
                     break;
                 }
             }
@@ -69,27 +66,29 @@ impl<const X: usize, const Y: usize> GameState<X, Y> {
 
         GameState {
             field: cells,
-            sub_state: GameCondition::InProgress,
+            game_condition: GameCondition::InProgress,
             bomb_count: num_bombs,
             flagged_count: 0,
+            width,
+            height,
         }
     }
     pub fn remaining_mines(&self) -> usize {
         self.bomb_count - self.flagged_count
     }
 
-    pub fn random_xy() -> (usize, usize) {
+    pub fn random_xy(width: usize, height: usize) -> (usize, usize) {
         (
-            (random::<f32>() * X as f32) as usize,
-            (random::<f32>() * Y as f32) as usize,
+            (random::<f32>() * width as f32) as usize,
+            (random::<f32>() * height as f32) as usize,
         )
     }
 
     pub fn at(&self, x: usize, y: usize) -> Option<Cell> {
-        if x >= X || y >= Y {
+        if x >= self.width || y >= self.height {
             None
         } else {
-            Some(self.field[y][x])
+            Some(self.field[y * self.width + x])
         }
     }
 
@@ -105,10 +104,10 @@ impl<const X: usize, const Y: usize> GameState<X, Y> {
     // }
 
     pub fn at_mut(&mut self, x: usize, y: usize) -> Option<&mut Cell> {
-        if x >= X || y >= Y {
+        if x >= self.width || y >= self.height {
             None
         } else {
-            Some(&mut self.field[y][x])
+            Some(&mut self.field[y * self.width + x])
         }
     }
 
@@ -126,7 +125,7 @@ impl<const X: usize, const Y: usize> GameState<X, Y> {
                     (x as isize + *x_offset) as usize,
                     (y as isize + *y_offset) as usize,
                 );
-                if x >= X || y >= Y {
+                if x >= self.width || y >= self.height {
                     continue;
                 }
                 neighbors.push((x, y));
@@ -141,10 +140,11 @@ impl<const X: usize, const Y: usize> GameState<X, Y> {
             return;
         }
         let copy = copy.unwrap();
-        if copy.state == CellState::Mine {
+        if copy.state == CellState::Mine && copy.visibility != CellVisibility::Flagged {
+            // if we flag an unflagged mine, advance the win condition.
             self.flagged_count += 1;
             if self.flagged_count == self.bomb_count {
-                self.sub_state = GameCondition::Won;
+                self.game_condition = GameCondition::Won;
             }
         }
         // for (nx, ny) in self.neighbors(x, y).iter() {
@@ -183,13 +183,12 @@ impl<const X: usize, const Y: usize> GameState<X, Y> {
                         state: CellState::Mine,
                         ..
                     } => {
-                        self.sub_state = GameCondition::Lost;
+                        self.game_condition = GameCondition::Lost;
                         copy
                     }
                     Cell {
                         state: CellState::Empty,
                         visibility: CellVisibility::Unknown,
-                        next_action: _,
                     } => {
                         // calculate neighbors
                         let mine_count = self
@@ -214,7 +213,6 @@ impl<const X: usize, const Y: usize> GameState<X, Y> {
 
                         Cell {
                             visibility: CellVisibility::Empty(mine_count),
-                            next_action: Event::None,
                             ..copy
                         }
                     }
@@ -240,19 +238,13 @@ impl<const X: usize, const Y: usize> GameState<X, Y> {
         }
     }
 
-    pub fn validate(&self, hypothetical: &GameState<X, Y>) -> bool {
+    pub fn validate(&self, hypothetical: &GameState) -> bool {
         // returns whether the hypothetical gamestate is the same as the current gamestate
         // after visibility is factored in.
 
-        for (i, (cell1, cell2)) in self
-            .field
-            .iter()
-            .flatten()
-            .zip(hypothetical.field.iter().flatten())
-            .enumerate()
-        {
+        for (i, (cell1, cell2)) in self.field.iter().zip(hypothetical.field.iter()).enumerate() {
             if let CellVisibility::Empty(n1) = cell1.visibility {
-                let (x, y) = (i % X, i / X);
+                let (x, y) = (i % self.width, i / self.width);
                 let n2 = hypothetical
                     .neighbors(x, y)
                     .iter()

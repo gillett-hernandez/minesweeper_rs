@@ -40,32 +40,73 @@ struct Opt {
 
     #[structopt(long, default_value = "2")]
     pub skip: usize,
+
+    #[structopt(long, default_value = "1500")]
+    pub num_bombs: usize,
 }
 
-fn check_and_restart_game<const X: usize, const Y: usize>(
-    game_state: &mut GameState<X, Y>,
-    solver: &mut Solver<X, Y>,
+fn check_and_restart_game(
+    game_state: &mut GameState,
+    solver: &mut Solver,
     saved_valid_clicks: &mut Vec<Event>,
     guess_count: &mut usize,
     num_bombs: usize,
 ) -> bool {
     let mut restart = false;
-    if game_state.sub_state == GameCondition::Lost {
-        println!("game lost, with {} guesses", guess_count);
+    if game_state.game_condition == GameCondition::Lost {
+        println!(
+            "game lost, with {} remaining mines, {} unknown squares, and {} total guesses",
+            game_state.remaining_mines(),
+            game_state
+                .field
+                .iter()
+                .filter(|c| c.visibility == CellVisibility::Unknown)
+                .count(),
+            guess_count
+        );
         restart = true;
+
         // one_off = true;
     }
-    if game_state.sub_state == GameCondition::Won {
-        println!("game won, with {} guesses", guess_count);
+    if game_state.game_condition == GameCondition::Won {
+        for i in game_state
+            .field
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| match e.visibility {
+                CellVisibility::Unknown => Some(i),
+                _ => None,
+            })
+            .collect::<Vec<usize>>()
+        {
+            let (x, y) = (i % game_state.width, i / game_state.width);
+            game_state.click(x, y);
+            if game_state.game_condition == GameCondition::Lost {
+                println!("{}, {} caused the game to lose after it had already been detected as won. contents were {:?}", x, y, game_state.at(x, y).unwrap());
+                break;
+            }
+        }
+        println!(
+            "game won, with {} remaining mines, {} unknown squares, and {} total guesses",
+            game_state.remaining_mines(),
+            game_state
+                .field
+                .iter()
+                .filter(|c| c.visibility == CellVisibility::Unknown)
+                .count(),
+            guess_count
+        );
         restart = true;
         // one_off = true;
     }
     if restart {
-        // if game_state.remaining_mines() as f32 / (NUM_BOMBS as f32) < 0.03 {
-        //     std::thread::sleep(std::time::Duration::from_secs(30));
-        // }
+        if game_state.remaining_mines() as f32 / (num_bombs as f32) < 0.03
+            && game_state.game_condition == GameCondition::Lost
+        {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+        }
 
-        *game_state = GameState::<X, Y>::new(num_bombs);
+        *game_state = GameState::new(game_state.width, game_state.height, num_bombs);
         *solver = Solver::new();
         *guess_count = 0;
         saved_valid_clicks.clear();
@@ -101,10 +142,7 @@ fn main() {
         .as_mut()
         .map(|w| w.limit_update_rate(Some(std::time::Duration::from_micros(frame_micros as u64))));
 
-    const WIDTH: usize = 100;
-    const HEIGHT: usize = 100;
-    const NUM_BOMBS: usize = 1300;
-    let mut game_state = GameState::<WIDTH, HEIGHT>::new(NUM_BOMBS);
+    let mut game_state = GameState::new(width, height, opt.num_bombs);
     let mut window_pixels = vec![0u32; width * height];
 
     rayon::ThreadPoolBuilder::new()
@@ -114,11 +152,10 @@ fn main() {
     // let (x, y) = game_state.random_xy_2();
     // game_state.click(x, y);
     // let mut one_off = true;
-    let mut solver = Solver::<WIDTH, HEIGHT>::new();
+    let mut solver = Solver::new();
     let mut guess_count = 0;
     let mut frame = 0;
     let framerule = opt.skip;
-    let display_gameboard = opt.silence;
     let mut saved_valid_clicks = Vec::new();
 
     'outer: loop {
@@ -130,39 +167,38 @@ fn main() {
         frame += 1;
         // draw phase
         if !opt.silence {
-            for (y, row) in game_state.field.iter().enumerate() {
-                for (x, cell) in row.iter().enumerate() {
-                    match cell {
-                        Cell {
-                            visibility: CellVisibility::Unknown,
-                            ..
-                        } => {
-                            window_pixels[y * width + x] = rgb_to_u32(128, 128, 128);
-                        }
-                        Cell {
-                            visibility: CellVisibility::Empty(neighbors),
-                            ..
-                        } => {
-                            // println!("blue is {}", (*neighbors as f32 * 256.0 / 8.0));
+            for (i, cell) in game_state.field.iter().enumerate() {
+                let (x, y) = (i % width, i / width);
+                match cell {
+                    Cell {
+                        visibility: CellVisibility::Unknown,
+                        ..
+                    } => {
+                        window_pixels[y * width + x] = rgb_to_u32(128, 128, 128);
+                    }
+                    Cell {
+                        visibility: CellVisibility::Empty(neighbors),
+                        ..
+                    } => {
+                        // println!("blue is {}", (*neighbors as f32 * 256.0 / 8.0));
 
-                            window_pixels[y * width + x] = match neighbors {
-                                0 => rgb_to_u32(0, 0, 0),
-                                1 => rgb_to_u32(0, 64, 64),
-                                2 => rgb_to_u32(0, 64, 127),
-                                3 => rgb_to_u32(80, 127, 255),
-                                4 => rgb_to_u32(80, 127, 0),
-                                5 => rgb_to_u32(80, 180, 127),
-                                6 => rgb_to_u32(160, 180, 180),
-                                7 => rgb_to_u32(160, 255, 255),
-                                _ => rgb_to_u32(255, 255, 255),
-                            };
-                        }
-                        Cell {
-                            visibility: CellVisibility::Flagged,
-                            ..
-                        } => {
-                            window_pixels[y * width + x] = rgb_to_u32(255, 0, 0);
-                        }
+                        window_pixels[y * width + x] = match neighbors {
+                            0 => rgb_to_u32(0, 0, 0),
+                            1 => rgb_to_u32(0, 64, 64),
+                            2 => rgb_to_u32(0, 64, 127),
+                            3 => rgb_to_u32(80, 127, 255),
+                            4 => rgb_to_u32(80, 127, 0),
+                            5 => rgb_to_u32(80, 180, 127),
+                            6 => rgb_to_u32(160, 180, 180),
+                            7 => rgb_to_u32(160, 255, 255),
+                            _ => rgb_to_u32(255, 255, 255),
+                        };
+                    }
+                    Cell {
+                        visibility: CellVisibility::Flagged,
+                        ..
+                    } => {
+                        window_pixels[y * width + x] = rgb_to_u32(255, 0, 0);
                     }
                 }
             }
@@ -185,7 +221,7 @@ fn main() {
                 &mut solver,
                 &mut saved_valid_clicks,
                 &mut guess_count,
-                NUM_BOMBS,
+                opt.num_bombs,
             ) {
                 continue 'outer;
             }
@@ -199,8 +235,7 @@ fn main() {
                 .field
                 .iter()
                 .enumerate()
-                .map(|(y, e)| e.iter().enumerate().map(move |(x, cell)| (x, y, cell)))
-                .flatten()
+                .map(|(i, e)| (i % width, i / width, e))
             {
                 match cell {
                     Cell {
@@ -221,6 +256,9 @@ fn main() {
                 - ramanujan_approximation(remaining_mines)
                 - ramanujan_approximation(sub))
                 / 10.0f32.ln();
+            if search_scale < 10.0 {
+                println!("guessing with search scale = {}", search_scale);
+            }
             if search_scale < 4.5 {
                 // need to generate combinations and track valid solutions.
                 let mut histogram = vec![0; unknown_cells.len()];
@@ -292,12 +330,12 @@ fn main() {
                 event = Event::Click { pos: (x, y) };
             } else {
                 guess_count += 1;
-                // println!(
-                //     "guessed randomly, unknown: {}, remaining mines: {}. search scale was {}",
-                //     unknown_cells.len(),
-                //     game_state.remaining_mines(),
-                //     search_scale
-                // );
+                println!(
+                    "guessed randomly, unknown: {}, remaining mines: {}. search scale was {}",
+                    unknown_cells.len(),
+                    game_state.remaining_mines(),
+                    search_scale
+                );
 
                 let index = (unknown_cells.len() as f32 * random::<f32>()) as usize;
                 let (x, y) = (unknown_cells[index].0, unknown_cells[index].1);
@@ -311,7 +349,7 @@ fn main() {
                 &mut solver,
                 &mut saved_valid_clicks,
                 &mut guess_count,
-                NUM_BOMBS,
+                opt.num_bombs,
             ) {
                 continue 'outer;
             }

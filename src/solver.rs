@@ -4,27 +4,28 @@ use rayon::iter::{
 
 use crate::game::*;
 
-pub trait Strategy<const X: usize, const Y: usize> {
-    fn attempt(&mut self, game_state: &GameState<X, Y>) -> Vec<Event>;
-    fn update(&mut self, game_state: &GameState<X, Y>, event: Event);
+pub trait Strategy {
+    fn attempt(&mut self, game_state: &GameState) -> Vec<Event>;
+    fn update(&mut self, game_state: &GameState, event: Event);
 }
 
 pub struct BijectionDetection {
     initialized: bool,
-    cells_of_interest: Vec<Option<Cell>>,
+    cells_of_interest: Vec<bool>,
 }
 
-impl<const X: usize, const Y: usize> Strategy<X, Y> for BijectionDetection {
-    fn attempt(&mut self, game_state: &GameState<X, Y>) -> Vec<Event> {
+impl Strategy for BijectionDetection {
+    fn attempt(&mut self, game_state: &GameState) -> Vec<Event> {
+        let width = game_state.width;
         let first_cells: Vec<Event> = self
             .cells_of_interest
             .par_iter_mut()
             .enumerate()
-            .filter_map(|(i, cell)| {
-                if cell.is_none() {
+            .filter_map(|(i, tracked)| {
+                if !*tracked {
                     return None;
                 }
-                let (x, y) = (i % X, i / X);
+                let (x, y) = (i % width, i / width);
                 let center_cell = game_state.at(x, y).unwrap();
                 let mut suggested_cell = Event::None;
                 match center_cell {
@@ -68,7 +69,7 @@ impl<const X: usize, const Y: usize> Strategy<X, Y> for BijectionDetection {
                         }
                         if flagged_neighbor_count == num_neighbor_mines {
                             // remove current cell because there's no more neighbor cells to click
-                            *cell = None;
+                            *tracked = false;
                             return None;
                         }
                         for (nx, ny) in game_state.neighbors(x, y) {
@@ -82,7 +83,7 @@ impl<const X: usize, const Y: usize> Strategy<X, Y> for BijectionDetection {
                             }
                         }
                     }
-                    _ => *cell = None,
+                    _ => *tracked = false,
                 }
                 // println!("returning from BijectionDetection with {:?} with neighbor {:?} when there were {} useful bijection cells to explore from", suggested_cell, neighbor_cell, bijection_opportunities);
                 Some(suggested_cell)
@@ -90,22 +91,24 @@ impl<const X: usize, const Y: usize> Strategy<X, Y> for BijectionDetection {
             .collect();
         first_cells
     }
-    fn update(&mut self, game_state: &GameState<X, Y>, event: Event) {
+    fn update(&mut self, game_state: &GameState, event: Event) {
         if !self.initialized {
             // do initialization step.
-            self.cells_of_interest = vec![None; X * Y];
+            self.cells_of_interest = vec![false; game_state.width * game_state.height];
             self.initialized = true;
         } else {
             // process event to update cells_of_interest, such that useless cells are ignored.
             match event {
                 Event::Flag { pos } => {
-                    self.cells_of_interest[pos.0 + pos.1 * X] = None;
+                    self.cells_of_interest[pos.0 + pos.1 * game_state.width] = false;
+                    for (x, y) in game_state.neighbors(pos.0, pos.1) {
+                        self.cells_of_interest[x + y * game_state.width] = true;
+                    }
                 }
                 Event::Click { pos } => {
-                    self.cells_of_interest[pos.0 + pos.1 * X] =
-                        Some(game_state.at(pos.0, pos.1).unwrap());
+                    self.cells_of_interest[pos.0 + pos.1 * game_state.width] = true;
                     for (x, y) in game_state.neighbors(pos.0, pos.1) {
-                        self.cells_of_interest[x + y * X] = Some(game_state.at(x, y).unwrap());
+                        self.cells_of_interest[x + y * game_state.width] = true;
                     }
                 }
                 _ => {}
@@ -116,11 +119,11 @@ impl<const X: usize, const Y: usize> Strategy<X, Y> for BijectionDetection {
 
 pub struct ExhaustedCellDetection {
     initialized: bool,
-    cells_of_interest: Vec<Option<Cell>>,
+    cells_of_interest: Vec<bool>,
 }
 
-impl<const X: usize, const Y: usize> Strategy<X, Y> for ExhaustedCellDetection {
-    fn attempt(&mut self, game_state: &GameState<X, Y>) -> Vec<Event> {
+impl Strategy for ExhaustedCellDetection {
+    fn attempt(&mut self, game_state: &GameState) -> Vec<Event> {
         // let mut neighbor_cell = None;
         // let mut zero_count = 0;
 
@@ -128,13 +131,13 @@ impl<const X: usize, const Y: usize> Strategy<X, Y> for ExhaustedCellDetection {
             .cells_of_interest
             .par_iter_mut()
             .enumerate()
-            .filter_map(|(i, cell)| {
-                if cell.is_none() {
+            .filter_map(|(i, tracked)| {
+                if !*tracked {
                     return None;
                 }
                 let mut suggested_cell = Event::None;
 
-                let (x, y) = (i % X, i / X);
+                let (x, y) = (i % game_state.width, i / game_state.width);
                 let center_cell = game_state.at(x, y).unwrap();
                 let mut suggested_cell = Event::None;
                 match center_cell {
@@ -177,11 +180,11 @@ impl<const X: usize, const Y: usize> Strategy<X, Y> for ExhaustedCellDetection {
                         }
 
                         // remove current cell because there's no more neighbor cells to click and we didn't break.
-                        *cell = None;
+                        *tracked = false;
                         return None;
                     }
                     _ => {
-                        *cell = None;
+                        *tracked = false;
                     }
                 }
 
@@ -192,22 +195,24 @@ impl<const X: usize, const Y: usize> Strategy<X, Y> for ExhaustedCellDetection {
 
         first_cells
     }
-    fn update(&mut self, game_state: &GameState<X, Y>, event: Event) {
+    fn update(&mut self, game_state: &GameState, event: Event) {
         if !self.initialized {
             // do initialization step.
-            self.cells_of_interest = vec![None; X * Y];
+            self.cells_of_interest = vec![false; game_state.width * game_state.height];
             self.initialized = true;
         } else {
             // process event to update cells_of_interest, such that useless cells are ignored.
             match event {
                 Event::Flag { pos } => {
-                    self.cells_of_interest[pos.0 + pos.1 * X] = None;
+                    self.cells_of_interest[pos.0 + pos.1 * game_state.width] = false;
+                    for (x, y) in game_state.neighbors(pos.0, pos.1) {
+                        self.cells_of_interest[x + y * game_state.width] = true;
+                    }
                 }
                 Event::Click { pos } => {
-                    self.cells_of_interest[pos.0 + pos.1 * X] =
-                        Some(game_state.at(pos.0, pos.1).unwrap());
+                    self.cells_of_interest[pos.0 + pos.1 * game_state.width] = true;
                     for (x, y) in game_state.neighbors(pos.0, pos.1) {
-                        self.cells_of_interest[x + y * X] = Some(game_state.at(x, y).unwrap());
+                        self.cells_of_interest[x + y * game_state.width] = true;
                     }
                 }
                 _ => {}
@@ -216,14 +221,14 @@ impl<const X: usize, const Y: usize> Strategy<X, Y> for ExhaustedCellDetection {
     }
 }
 
-pub struct Solver<const X: usize, const Y: usize> {
+pub struct Solver {
     // add various internal trackers
-    strategies: Vec<Box<dyn Strategy<X, Y>>>,
+    strategies: Vec<Box<dyn Strategy>>,
 }
 
-impl<const X: usize, const Y: usize> Solver<X, Y> {
+impl Solver {
     pub fn new() -> Self {
-        let mut solvers: Vec<Box<dyn Strategy<X, Y>>> = Vec::new();
+        let mut solvers: Vec<Box<dyn Strategy>> = Vec::new();
         solvers.push(Box::new(ExhaustedCellDetection {
             initialized: false,
             cells_of_interest: vec![],
@@ -237,7 +242,7 @@ impl<const X: usize, const Y: usize> Solver<X, Y> {
         }
     }
 
-    pub fn next_clicks(&mut self, game_state: &GameState<X, Y>) -> Vec<Event> {
+    pub fn next_clicks(&mut self, game_state: &GameState) -> Vec<Event> {
         let events: Vec<Event> = (&mut self.strategies)
             .iter_mut() // mutably iterate over strategies
             .map(|solver| solver.attempt(game_state)) // attempt to solve with each strategy
@@ -255,7 +260,7 @@ impl<const X: usize, const Y: usize> Solver<X, Y> {
         events
     }
 
-    pub fn update(&mut self, game_state: &GameState<X, Y>, event: Event) {
+    pub fn update(&mut self, game_state: &GameState, event: Event) {
         for solver in self.strategies.iter_mut() {
             solver.update(&game_state, event);
         }
