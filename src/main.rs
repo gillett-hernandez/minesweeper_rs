@@ -51,6 +51,7 @@ fn check_and_restart_game(
     saved_valid_clicks: &mut Vec<Event>,
     guess_count: &mut usize,
     num_bombs: usize,
+    opt: &Opt,
 ) -> bool {
     let mut restart = false;
     if game_state.game_condition == GameCondition::Lost {
@@ -102,6 +103,7 @@ fn check_and_restart_game(
     if restart {
         if game_state.remaining_mines() as f32 / (num_bombs as f32) < 0.03
             && game_state.game_condition == GameCondition::Lost
+            && !opt.silence
         {
             std::thread::sleep(std::time::Duration::from_secs(3));
         }
@@ -222,6 +224,7 @@ fn main() {
                 &mut saved_valid_clicks,
                 &mut guess_count,
                 opt.num_bombs,
+                &opt,
             ) {
                 continue 'outer;
             }
@@ -350,6 +353,7 @@ fn main() {
                 &mut saved_valid_clicks,
                 &mut guess_count,
                 opt.num_bombs,
+                &opt,
             ) {
                 continue 'outer;
             }
