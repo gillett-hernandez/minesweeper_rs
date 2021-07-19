@@ -1,4 +1,7 @@
-use std::borrow::Borrow;
+use std::{
+    borrow::Borrow,
+    collections::{HashMap, HashSet},
+};
 
 use minifb::{Key, KeyRepeat, MouseButton, MouseMode, Scale, Window, WindowOptions};
 pub use rand::prelude::*;
@@ -43,6 +46,9 @@ struct Opt {
 
     #[structopt(long, default_value = "1500")]
     pub num_bombs: usize,
+
+    #[structopt(long, default_value = "0")]
+    pub delay_ms: usize,
 }
 
 fn check_and_restart_game(
@@ -50,13 +56,14 @@ fn check_and_restart_game(
     solver: &mut Solver,
     saved_valid_clicks: &mut Vec<Event>,
     guess_count: &mut usize,
+    wins: &mut (usize, usize),
     num_bombs: usize,
     opt: &Opt,
 ) -> bool {
     let mut restart = false;
     if game_state.game_condition == GameCondition::Lost {
         println!(
-            "game lost, with {} remaining mines, {} unknown squares, and {} total guesses",
+            "game lost, with {} remaining mines, {} unknown squares, and {} total guesses\n\n\n",
             game_state.remaining_mines(),
             game_state
                 .field
@@ -88,7 +95,7 @@ fn check_and_restart_game(
             }
         }
         println!(
-            "game won, with {} remaining mines, {} unknown squares, and {} total guesses",
+            "game won, with {} remaining mines, {} unknown squares, and {} total guesses\n\n\n",
             game_state.remaining_mines(),
             game_state
                 .field
@@ -105,7 +112,24 @@ fn check_and_restart_game(
             && game_state.game_condition == GameCondition::Lost
             && !opt.silence
         {
-            std::thread::sleep(std::time::Duration::from_secs(3));
+            std::thread::sleep(std::time::Duration::from_millis(opt.delay_ms as u64));
+        }
+        if game_state.game_condition == GameCondition::Won {
+            wins.0 += 1;
+            wins.1 += 1;
+        } else if (game_state.width * game_state.height
+            - game_state
+                .field
+                .iter()
+                .filter(|c| c.visibility == CellVisibility::Unknown)
+                .count())
+            > 10
+        {
+            // only count attempts that have more than 10 clicked/flagged cells. removes games that end really quickly from consideration
+            wins.1 += 1;
+        }
+        if wins.1 > 0 {
+            println!("winrate: {}", wins.0 as f32 / wins.1 as f32);
         }
 
         *game_state = GameState::new(game_state.width, game_state.height, num_bombs);
@@ -116,6 +140,241 @@ fn check_and_restart_game(
     } else {
         false
     }
+}
+
+fn educated_guess(
+    game_state: &mut GameState,
+    guess_count: &mut usize,
+    saved_valid_clicks: &mut Vec<Event>,
+) -> Event {
+    let mut event = Event::None;
+    let mut unknown_cells = Vec::new();
+    let (width, _) = (game_state.width, game_state.height);
+    for (x, y, cell) in game_state
+        .field
+        .iter()
+        .enumerate()
+        .map(|(i, e)| (i % width, i / width, e))
+    {
+        match cell {
+            Cell {
+                visibility: CellVisibility::Unknown,
+                ..
+            } => {
+                unknown_cells.push((x, y));
+            }
+            _ => {}
+        }
+    }
+    // execute optimal guessing strategy:
+    // partition unknown cells into territory based groups.
+    // iterate through all possible partitions of bomb counts for the given number of groups.
+    // then for each partition and presupposition of bomb counts per group, iterate through all combinations of bomb positions, checking for hint consistency between current board and hypothetical board.
+    // if the hypothetical is consistent with the current board, track probabilities
+    // after all this is over, select all the cells that had a 0 probability of having a bomb.
+
+    let mut groups: Vec<HashSet<(usize, usize)>> = Vec::new();
+    groups.push(HashSet::new());
+    let mut ungrouped_cells: HashSet<(usize, usize)> = unknown_cells.iter().cloned().collect();
+    let mut check_queue = Vec::new();
+    let mut group_idx = 0;
+    // while there are any ungrouped cells
+    while ungrouped_cells.len() > 0 {
+        let first_ungrouped_cell = ungrouped_cells.iter().take(1).next().unwrap();
+        groups[group_idx].insert(*first_ungrouped_cell);
+        check_queue.push(*first_ungrouped_cell);
+        // grow the currently active group by consuming the check queue
+        while check_queue.len() > 0 {
+            let cell = check_queue.pop().unwrap();
+            let neighborhood = game_state
+                .neighbors(cell.0, cell.1)
+                .iter()
+                .map(|e| game_state.neighbors(e.0, e.1))
+                .flatten()
+                .collect::<HashSet<_>>();
+            for neighbor in neighborhood.iter() {
+                if *neighbor == cell {
+                    continue;
+                }
+                let neighbor_cell = game_state.at(neighbor.0, neighbor.1).unwrap();
+                if ungrouped_cells.contains(neighbor) {
+                    match neighbor_cell.visibility {
+                        CellVisibility::Unknown => {
+                            groups[group_idx].insert(*neighbor);
+                            check_queue.push(*neighbor);
+                            ungrouped_cells.remove(neighbor);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        // check queue must be empty now, so continue to the next ungrouped cell and start a new group.
+
+        if ungrouped_cells.len() > 0 {
+            group_idx += 1;
+            groups.push(HashSet::new());
+        }
+    }
+    let remaining_mines = game_state.remaining_mines();
+
+    println!(
+        "partitioned {} bombs into {} unknown_cells: {} groups total, {:?} distribution",
+        remaining_mines,
+        unknown_cells.len(),
+        groups.len(),
+        groups.iter().map(|e| e.len()).collect::<Vec<usize>>()
+    );
+    // let remaining_mines_float = game_state.remaining_mines() as f32;
+    let mut histogram = HashMap::new();
+    for (x, y) in unknown_cells.iter() {
+        histogram.insert(x + y * width, 0usize);
+    }
+
+    let empty_iter: Vec<Vec<usize>> = vec![vec![]];
+    let iter: Box<dyn Iterator<Item = Vec<usize>>>;
+    if groups.len() == 1 {
+        iter = Box::new(empty_iter.iter().cloned());
+    } else {
+        iter = Box::new(CombinationIterator::new(remaining_mines, groups.len() - 1));
+    }
+
+    let search_scale = (ramanujan_approximation(remaining_mines as f32)
+        - ramanujan_approximation(groups.len() as f32 - 1.0)
+        - ramanujan_approximation(1.0 + remaining_mines as f32 - groups.len() as f32))
+        / 10.0f32.ln();
+    if search_scale < 3.0 {
+        println!("searching partitions and combinations.");
+        let mut collected = iter.collect::<Vec<_>>();
+        let collected_hashmaps: HashMap<_, _> = collected
+            .par_iter_mut()
+            .map(|partition| {
+                partition.insert(0, 0);
+                partition.push(remaining_mines);
+
+                let mine_counts: Vec<_> = partition.windows(2).map(|w| w[1] - w[0]).collect();
+                if groups
+                    .iter()
+                    .enumerate()
+                    .any(|(i, e)| mine_counts[i] > e.len())
+                {
+                    return HashMap::new();
+                }
+                // println!("");
+                let mut local_histogram = HashMap::new();
+                for (group_idx, group) in groups.iter().enumerate() {
+                    let remaining_mines = mine_counts[group_idx];
+                    let remaining_mines_float = remaining_mines as f32;
+                    let unknown_cells: Vec<_> = group.iter().cloned().collect();
+                    let unknown_cells_float = unknown_cells.len() as f32;
+                    let sub = unknown_cells_float - remaining_mines_float;
+
+                    // calculate order of magnitude of combinations that need to be searched.
+                    let search_scale = (ramanujan_approximation(unknown_cells_float)
+                        - ramanujan_approximation(remaining_mines_float)
+                        - ramanujan_approximation(sub))
+                        / 10.0f32.ln();
+
+                    if search_scale < 3.0 {
+                        // need to generate combinations and track valid solutions.
+                        print!(".");
+                        let mut hypothetical = game_state.clone();
+
+                        for combination in
+                            CombinationIterator::new(unknown_cells.len(), remaining_mines)
+                        {
+                            // combination is the indices into local unknown_cells
+                            let mut idx = 0;
+                            let mut last_seen = combination[idx];
+                            for (i, (x, y)) in unknown_cells.iter().enumerate() {
+                                if i == last_seen {
+                                    idx += 1;
+                                    if idx < combination.len() {
+                                        last_seen = combination[idx];
+                                    }
+
+                                    hypothetical.at_mut(*x, *y).unwrap().state = CellState::Mine;
+                                    continue;
+                                } else {
+                                    hypothetical.at_mut(*x, *y).unwrap().state = CellState::Empty;
+                                }
+                            }
+                            if game_state.validate(&hypothetical) {
+                                // if game_state and hypothetical were compatible, it means that either state could have resulted in the current visible appearance.
+                                // for each bomb position in the hypothetical, add 1 to its position in the histogram
+
+                                for idx in combination.iter() {
+                                    let cell = unknown_cells[*idx];
+                                    *local_histogram.entry(cell.1 * width + cell.0).or_insert(0) +=
+                                        1;
+                                }
+                            }
+                        }
+                    } else {
+                        print!("#");
+                        for (i, cell) in unknown_cells.iter().enumerate() {
+                            *local_histogram
+                                .entry(cell.1 * width + cell.0)
+                                .or_insert(0usize) += 1;
+                        }
+                    }
+                }
+                local_histogram
+            })
+            .reduce(
+                || HashMap::new(),
+                |mut a, b| {
+                    b.iter().for_each(|e| *a.entry(*e.0).or_insert(0) += e.1);
+                    a
+                },
+            );
+        // fold parallel hashmaps into main histogram
+        collected_hashmaps
+            .iter()
+            .for_each(|e| *histogram.entry(*e.0).or_insert(0) += e.1);
+    } else {
+        histogram.par_iter_mut().for_each(|(k, v)| *v += 1);
+    }
+
+    // now that the histogram has been tallied, select one of the cells with the lowest probability of being a bomb.
+    let mut augmented_histogram: Vec<(usize, usize)> =
+        histogram.iter().map(|(k, v)| (*k, *v)).collect();
+    augmented_histogram.sort_unstable_by_key(|e| e.1);
+
+    if augmented_histogram.len() < 100 {
+        println!(
+            "guessed combinatorically, unknown: {}, remaining mines: {}. pdf was {:?}",
+            unknown_cells.len(),
+            game_state.remaining_mines(),
+            augmented_histogram,
+        );
+    } else {
+        println!("guessing randomly");
+    }
+
+    let index = augmented_histogram[0].0;
+    // if we have some nonzero number of cells that have been combinatorically deduced to not be mines,
+    if augmented_histogram[0].1 == 0 {
+        // add all but the 1st to a list so that they can be clicked on later without wasting additional computational effort.
+        for (idx, ct) in augmented_histogram.iter().skip(1) {
+            if *ct == 0 {
+                saved_valid_clicks.push(Event::Click {
+                    pos: (*idx % width, *idx / width),
+                });
+            } else {
+                break;
+            }
+        }
+    }
+
+    if augmented_histogram[0].1 > 0 {
+        *guess_count += 1;
+    }
+    let (x, y) = (index % width, index / width);
+    drop(unknown_cells);
+    event = Event::Click { pos: (x, y) };
+
+    event
 }
 
 fn main() {
@@ -159,6 +418,7 @@ fn main() {
     let mut frame = 0;
     let framerule = opt.skip;
     let mut saved_valid_clicks = Vec::new();
+    let mut wins = (0, 0);
 
     'outer: loop {
         if let Some(w) = &window {
@@ -223,6 +483,7 @@ fn main() {
                 &mut solver,
                 &mut saved_valid_clicks,
                 &mut guess_count,
+                &mut wins,
                 opt.num_bombs,
                 &opt,
             ) {
@@ -232,119 +493,13 @@ fn main() {
         }
 
         if events.len() == 0 {
-            let mut event = Event::None;
-            let mut unknown_cells = Vec::new();
-            for (x, y, cell) in game_state
-                .field
-                .iter()
-                .enumerate()
-                .map(|(i, e)| (i % width, i / width, e))
-            {
-                match cell {
-                    Cell {
-                        visibility: CellVisibility::Unknown,
-                        ..
-                    } => {
-                        unknown_cells.push((x, y, cell));
-                    }
-                    _ => {}
-                }
-            }
-            // execute optimal guessing strategy:
+            let event = educated_guess(&mut game_state, &mut guess_count, &mut saved_valid_clicks);
 
-            let unknown_cells_float = unknown_cells.len() as f32;
-            let remaining_mines = game_state.remaining_mines() as f32;
-            let sub = unknown_cells_float - remaining_mines;
-            let search_scale = (ramanujan_approximation(unknown_cells_float)
-                - ramanujan_approximation(remaining_mines)
-                - ramanujan_approximation(sub))
-                / 10.0f32.ln();
-            if search_scale < 10.0 {
-                println!("guessing with search scale = {}", search_scale);
-            }
-            if search_scale < 4.5 {
-                // need to generate combinations and track valid solutions.
-                let mut histogram = vec![0; unknown_cells.len()];
-                let mut hypothetical = game_state.clone();
-                let mut valid_combinations = 0;
-                for combination in
-                    CombinationIterator::new(unknown_cells.len(), game_state.remaining_mines())
-                {
-                    // combination is the indices into unknown_cells
-                    let mut idx = 0;
-                    let mut last_seen = combination[idx];
-                    for (i, (x, y, _)) in unknown_cells.iter().enumerate() {
-                        if i == last_seen {
-                            idx += 1;
-                            if idx < combination.len() {
-                                last_seen = combination[idx];
-                            }
+            match event {
+                Event::Flag { pos } => game_state.flag(pos.0, pos.1),
+                Event::Click { pos } => game_state.click(pos.0, pos.1),
 
-                            hypothetical.at_mut(*x, *y).unwrap().state = CellState::Mine;
-                            continue;
-                        } else {
-                            hypothetical.at_mut(*x, *y).unwrap().state = CellState::Empty;
-                        }
-                    }
-                    if game_state.validate(&hypothetical) {
-                        // if game_state and hypothetical were compatible, it means that either state could have resulted in the current visible appearance.
-                        // for each bomb position in the hypothetical, add 1 to its position in the histogram
-                        valid_combinations += 1;
-                        for idx in combination.iter() {
-                            histogram[*idx] += 1;
-                        }
-                    }
-                }
-
-                // now that the histogram has been tallied, select one of the cells with the lowest probability of being a bomb.
-                let mut augmented_histogram = histogram
-                    .iter()
-                    .enumerate()
-                    .map(|e| (e.0, *e.1))
-                    .collect::<Vec<(usize, i32)>>();
-                augmented_histogram.sort_unstable_by_key(|e| e.1);
-
-                println!(
-                    "guessed combinatorically, unknown: {}, remaining mines: {}. pdf was {:?}",
-                    unknown_cells.len(),
-                    game_state.remaining_mines(),
-                    augmented_histogram,
-                );
-
-                let index = augmented_histogram[0].0;
-                if augmented_histogram[0].1 == 0 {
-                    for (idx, ct) in augmented_histogram.iter().skip(1) {
-                        if *ct == 0 {
-                            saved_valid_clicks.push(Event::Click {
-                                pos: (unknown_cells[*idx].0, unknown_cells[*idx].1),
-                            });
-                        } else {
-                            break;
-                        }
-                    }
-                }
-
-                if augmented_histogram[0].1 > 0 {
-                    guess_count += 1;
-                }
-                let (x, y) = (unknown_cells[index].0, unknown_cells[index].1);
-                drop(unknown_cells);
-                game_state.click(x, y);
-                event = Event::Click { pos: (x, y) };
-            } else {
-                guess_count += 1;
-                println!(
-                    "guessed randomly, unknown: {}, remaining mines: {}. search scale was {}",
-                    unknown_cells.len(),
-                    game_state.remaining_mines(),
-                    search_scale
-                );
-
-                let index = (unknown_cells.len() as f32 * random::<f32>()) as usize;
-                let (x, y) = (unknown_cells[index].0, unknown_cells[index].1);
-                drop(unknown_cells);
-                game_state.click(x, y);
-                event = Event::Click { pos: (x, y) };
+                Event::None => {}
             }
 
             if check_and_restart_game(
@@ -352,6 +507,7 @@ fn main() {
                 &mut solver,
                 &mut saved_valid_clicks,
                 &mut guess_count,
+                &mut wins,
                 opt.num_bombs,
                 &opt,
             ) {

@@ -17,6 +17,9 @@ impl CombinationIterator {
 impl Iterator for CombinationIterator {
     type Item = Vec<usize>;
     fn next(&mut self) -> Option<Self::Item> {
+        // if self.state.len() == 0 {
+        //     return None;
+        // }
         if self.state[0] == 1 + self.n - self.r {
             return None;
         }
@@ -67,5 +70,18 @@ mod test {
         }
         println!("found {} total combinations", count);
         assert!(count == 10 * 9 * 8 / 3 / 2 / 1);
+    }
+
+    #[test]
+    fn test_mine_count_partitions() {
+        let remaining_mines = 10;
+        let groups = vec![0; 3];
+        for mut partition_indices in CombinationIterator::new(remaining_mines, groups.len() - 1) {
+            partition_indices.insert(0, 0);
+            partition_indices.push(remaining_mines);
+            // println!("{:?}", partition_indices);
+            let mine_counts: Vec<_> = partition_indices.windows(2).map(|w| w[1] - w[0]).collect();
+            println!("{:?}", mine_counts);
+        }
     }
 }
