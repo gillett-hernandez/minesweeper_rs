@@ -368,6 +368,7 @@ fn educated_guess(
     }
 
     if augmented_histogram[0].1 > 0 {
+        // since the chance of the picked entry being a bomb is nonzero, add 1 to the guess count to indicate that actual guesses (rather than combinatoric deductions) are being performed
         *guess_count += 1;
     }
     let (x, y) = (index % width, index / width);
